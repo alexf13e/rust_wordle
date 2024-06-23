@@ -93,7 +93,6 @@ impl WordleGame {
 
         //display keyboard 2 rows below current input
         crossterm::queue!(stdout(),
-            cursor::SavePosition,
             Print("\n"),
             terminal::Clear(terminal::ClearType::CurrentLine),
             Print("\n"),
@@ -117,7 +116,7 @@ impl WordleGame {
         queue_row_print_commands(&keyboard_row_3, &self.letter_states);
         
         //set colours back to normal and move back up to the line for user input
-        crossterm::queue!(stdout(), ResetColor, cursor::RestorePosition).unwrap();
+        crossterm::queue!(stdout(), ResetColor, cursor::MoveToPreviousLine(4)).unwrap();
         stdout().flush().unwrap();
     }
 
