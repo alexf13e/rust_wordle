@@ -1,159 +1,322 @@
 
-use std::{io::{self, stdout, Write}, process::exit};
+use std::{collections::HashMap, io::{self, stdout, Write}, process::exit};
 use std::fs;
 
 use crossterm::{cursor, style::{Color, Print, ResetColor, SetForegroundColor}, terminal};
 use rand;
 
-enum Correctness {
+
+enum GuessCorrectness {
     EXACT,
     PART,
     NONE
 }
 
-const MAX_GUESSES: u8 = 6;
+enum LetterState {
+    UNKNOWN,
+    PRESENT,
+    ABSENT
+}
 
-fn main() {
-    let words = fs::read_to_string("./wordle-La.txt").expect("Failed to open wordle-LA.txt");
-    let words = words.split('\n').collect::<Vec<&str>>();
-    let num_words = words.len();
+enum InputType {
+    OK,
+    ERROR,
+    EXIT
+}
 
-    println!("Wordle - {MAX_GUESSES} attempts - type q to quit");
+struct WordleGame {
+    all_words: Vec<String>,
+    answer_word: String,
+    guess_word: String,
+    letter_states: HashMap<char, LetterState>,
+    max_guesses: u8,
+    current_guess_num: u8,
+}
 
-    loop {
-        let word_index = (rand::random::<f32>() * num_words as f32).floor() as usize;
-        let answer_word = words[word_index];
-        let answer_length = answer_word.len();
+impl WordleGame {
+    fn load_word_list(&mut self) {
+        self.all_words = fs::read_to_string("./wordle-La.txt")
+            .expect("Failed to open wordle-LA.txt")
+            .lines()
+            .map(String::from)
+            .collect();
+    }
 
-        let mut num_guesses_remaining = MAX_GUESSES;
-        while num_guesses_remaining > 0 {
-            //print guess count
-            let current_guess_num = MAX_GUESSES - num_guesses_remaining + 1;
-            print!("{}: ", current_guess_num);
-            stdout().flush().unwrap();
+    fn new_game(&mut self) {
+        self.reset_letter_states();
+        self.new_answer_word();
+        self.current_guess_num = 1;
+    }
 
-            //get user input
-            let mut input_word_buf = String::new();
-            io::stdin()
-            .read_line(&mut input_word_buf)
-            .expect("Failed to read input");
-        
-            let input_word = input_word_buf.to_lowercase();
-            let input_word = input_word.trim();
+    fn new_answer_word(&mut self) {
+        let word_index = (rand::random::<f32>() * self.all_words.len() as f32).floor() as usize;
+        self.answer_word = self.all_words[word_index].clone();
+    }
 
-            if input_word == "q" {
-                exit(0);
+    fn reset_letter_states(&mut self) {
+        for char_code in 97..=122 {
+            //lowercase letters a-z
+            let letter = char::from_u32(char_code).unwrap();
+            self.letter_states.insert(letter, LetterState::UNKNOWN);
+        }
+    }
+
+    fn print_keyboard(&mut self) {
+        fn queue_row_print_commands(row: &str, letter_states: &HashMap<char, LetterState>) {
+            for (_, b) in row.as_bytes().iter().enumerate() {
+                let letter = *b as char;
+                let colour_command = match letter_states.get(&letter).unwrap() {
+                    LetterState::UNKNOWN => SetForegroundColor(Color::White),
+                    LetterState::PRESENT => SetForegroundColor(Color::Yellow),
+                    LetterState::ABSENT => SetForegroundColor(Color::DarkGrey)
+                };
+    
+                crossterm::queue!(stdout(),
+                    colour_command,
+                    Print(format!("{letter} "))
+                ).unwrap();
             }
-        
-            //check input length is correct
-            if input_word.len() < answer_length {
-                print_user_input_error(String::from(format!("Word is too short, must have {answer_length} letters")), &current_guess_num);
-                continue;
-            }
-            if input_word.len() > answer_length {
-                print_user_input_error(String::from(format!("Word is too long, must have {answer_length} letters")), &current_guess_num);
-                continue;
-            }
-            if !words.contains(&input_word) {
-                print_user_input_error(String::from(format!("{input_word} is not in the dictionary")), &current_guess_num);
-                continue;
-            }
-            
-            //check which input characters are in the answer
-            let input_correctness = get_correctness(&input_word, &answer_word);
-
-            //show how correct the guess was
-            print_guess_correctness(&input_word, &input_correctness, &current_guess_num);
-
-            //check if word was exact match
-            if input_word == answer_word {
-                break;
-            }
-            
-            num_guesses_remaining = num_guesses_remaining - 1;
         }
 
-        if num_guesses_remaining <= 0 {
-            //ran out of guesses
-            println!("Ran out of guesses, the word was {answer_word}");
-        } else {
-            //guessed the word
-            println!("Correctly guessed the word");
-        }
+        //print each row, with each letter being coloured based on if it is in the word, not in the word, or hasn't been
+        //checked yet
+        let keyboard_row_1 = "qwertyuiop";
+        let keyboard_row_2 = "asdfghjkl";
+        let keyboard_row_3 = "zxcvbnm";
 
-        print!("Would you like to play again (y/N): ");
+        //display keyboard 2 rows below current input
+        crossterm::queue!(stdout(),
+            cursor::SavePosition,
+            Print("\n"),
+            terminal::Clear(terminal::ClearType::CurrentLine),
+            Print("\n"),
+            terminal::Clear(terminal::ClearType::CurrentLine)
+        ).unwrap();
+        queue_row_print_commands(&keyboard_row_1, &self.letter_states);
+        
+        //add spaces to start of row 2 and 3 to make printed keyboard layout more accurate
+        crossterm::queue!(stdout(),
+            Print("\n"),
+            terminal::Clear(terminal::ClearType::CurrentLine),
+            Print(" ")
+        ).unwrap();
+        queue_row_print_commands(&keyboard_row_2, &self.letter_states);
+        
+        crossterm::queue!(stdout(),
+            Print("\n"),
+            terminal::Clear(terminal::ClearType::CurrentLine),
+            Print("  ")
+        ).unwrap();
+        queue_row_print_commands(&keyboard_row_3, &self.letter_states);
+        
+        //set colours back to normal and move back up to the line for user input
+        crossterm::queue!(stdout(), ResetColor, cursor::RestorePosition).unwrap();
         stdout().flush().unwrap();
-
-        let mut input_play_again = String::new();
-            io::stdin()
-            .read_line(&mut input_play_again)
-            .expect("Failed to read input");
-
-        input_play_again = String::from(input_play_again.trim());
-        if input_play_again.to_lowercase() != "y" {
-            break;
-        }
-    }
-}
-
-fn print_user_input_error(message: String, current_guess_num: &u8) {
-    crossterm::execute!(stdout(),
-        cursor::MoveToPreviousLine(1),
-        terminal::Clear(terminal::ClearType::CurrentLine),
-        Print(format!("{current_guess_num}: ")),
-        SetForegroundColor(Color::Red),
-        cursor::MoveToColumn(15),
-        Print(message),
-        ResetColor,
-        cursor::MoveToColumn(0)
-    ).unwrap();
-}
-
-fn get_correctness(input_word: &str, answer_word: &str) -> Vec::<Correctness> {
-    let mut input_correctness = Vec::<Correctness>::new();
-    
-    let input_bytes = input_word.as_bytes();
-    let answer_bytes = answer_word.as_bytes();
-
-    for (i, _) in input_bytes.iter().enumerate() {
-        if input_bytes[i] == answer_bytes[i] {
-            //character matches exactly
-            input_correctness.push(Correctness::EXACT);
-        }
-        else if answer_bytes.contains(&input_bytes[i]) {
-            //character is in word
-            input_correctness.push(Correctness::PART);
-        }
-        else {
-            //character not in word
-            input_correctness.push(Correctness::NONE);
-        }
     }
 
-    return input_correctness;
-}
-
-fn print_guess_correctness(input_word: &str, input_correctness: &Vec::<Correctness>, current_guess_num: &u8) {    
-    crossterm::execute!(stdout(),
-        cursor::MoveToPreviousLine(1),
-        terminal::Clear(terminal::ClearType::CurrentLine),
-        Print(format!("{current_guess_num}: ")),
-    ).unwrap();
-    
-    for (i, &c) in input_word.as_bytes().iter().enumerate() {
-        let colour_command = match input_correctness[i] {
-            Correctness::EXACT => SetForegroundColor(Color::Green),
-            Correctness::PART => SetForegroundColor(Color::Yellow),
-            Correctness::NONE => SetForegroundColor(Color::DarkGrey)
-        };
-
-        let c = char::from(c);
-        crossterm::execute!(stdout(),
-            colour_command,
-            Print(c),
-            ResetColor
+    fn clear_keyboard(&mut self) {
+        crossterm::queue!(stdout(),
+            cursor::SavePosition,
+            Print("\n"),
+            terminal::Clear(terminal::ClearType::CurrentLine),
+            Print("\n"),
+            terminal::Clear(terminal::ClearType::CurrentLine),
+            Print("\n"),
+            terminal::Clear(terminal::ClearType::CurrentLine),
+            cursor::RestorePosition
         ).unwrap();
     }
 
-    println!();
+    fn print_guess_num(&mut self) {
+        print!("{}: ", self.current_guess_num);
+        stdout().flush().unwrap();
+    }
+
+    fn input_guess_word(&mut self) {
+        let mut input_word_buf = String::new();
+        io::stdin()
+            .read_line(&mut input_word_buf)
+            .expect("Failed to read input");
+    
+        self.guess_word = input_word_buf.to_lowercase().trim().to_string();
+    }
+
+    fn check_guess_errors(&mut self) -> InputType {
+        //check if user wanted to quit
+        if self.guess_word == "q" {
+            return InputType::EXIT;
+        }
+    
+        //check input length is correct
+        if self.guess_word.len() < self.answer_word.len() {
+            self.print_user_input_error(String::from(format!("Word is too short, must have {} letters",
+                self.answer_word.len())));
+            return InputType::ERROR;
+        }
+        if self.guess_word.len() > self.answer_word.len() {
+            self.print_user_input_error(String::from(format!("Word is too long, must have {} letters",
+                self.answer_word.len())));
+            return InputType::ERROR;
+        }
+
+        //check if input word is a real word (according to the almighty wordle list)
+        if !self.all_words.contains(&self.guess_word) {
+            self.print_user_input_error(String::from(format!("{} is not in the dictionary", self.guess_word)));
+            return InputType::ERROR;
+        }
+
+        InputType::OK
+    }
+
+    fn print_user_input_error(&mut self, message: String) {
+        crossterm::execute!(stdout(),
+            cursor::MoveToPreviousLine(1),
+            terminal::Clear(terminal::ClearType::CurrentLine),
+            Print(format!("{}: ", self.current_guess_num)),
+            SetForegroundColor(Color::Red),
+            cursor::MoveToColumn(15),
+            Print(message),
+            ResetColor,
+            cursor::MoveToColumn(0)
+        ).unwrap();
+    }
+
+    fn get_guess_correctness(&mut self) -> Vec::<GuessCorrectness> {
+        let mut input_correctness = Vec::<GuessCorrectness>::new();
+        
+        let input_bytes = self.guess_word.as_bytes();
+        let answer_bytes = self.answer_word.as_bytes();
+    
+        for (i, _) in input_bytes.iter().enumerate() {
+            if input_bytes[i] == answer_bytes[i] {
+                //character matches exactly
+                input_correctness.push(GuessCorrectness::EXACT);
+            }
+            else if answer_bytes.contains(&input_bytes[i]) {
+                //character is somewhere in word
+                input_correctness.push(GuessCorrectness::PART);
+            }
+            else {
+                //character is not in word
+                input_correctness.push(GuessCorrectness::NONE);
+            }
+        }
+    
+        return input_correctness;
+    }
+
+    fn update_letter_states(&mut self, guess_correctness: &Vec::<GuessCorrectness>) {
+        let input_bytes = self.guess_word.as_bytes();
+        for (i, b) in input_bytes.iter().enumerate() {
+            let letter = *b as char;
+            let current_state = self.letter_states.get(&letter).unwrap();
+            if matches!(*current_state, LetterState::UNKNOWN) {
+                let new_state = match guess_correctness[i] {
+                    GuessCorrectness::EXACT | GuessCorrectness::PART => LetterState::PRESENT,
+                    GuessCorrectness::NONE => LetterState::ABSENT
+                };
+
+                self.letter_states.insert(letter, new_state);
+            }
+        }
+    }
+
+    fn print_guess_highlighted(&mut self, input_correctness: &Vec::<GuessCorrectness>) {    
+        crossterm::execute!(stdout(),
+            cursor::MoveToPreviousLine(1),
+            terminal::Clear(terminal::ClearType::CurrentLine),
+            Print(format!("{}: ", self.current_guess_num)),
+        ).unwrap();
+        
+        for (i, &c) in self.guess_word.as_bytes().iter().enumerate() {
+            let colour_command = match input_correctness[i] {
+                GuessCorrectness::EXACT => SetForegroundColor(Color::Green),
+                GuessCorrectness::PART => SetForegroundColor(Color::Yellow),
+                GuessCorrectness::NONE => SetForegroundColor(Color::DarkGrey)
+            };
+    
+            let c = char::from(c);
+            crossterm::execute!(stdout(),
+                colour_command,
+                Print(c),
+                ResetColor
+            ).unwrap();
+        }
+    
+        println!();
+    }
+
+    fn run(&mut self) {
+        println!("Wordle - {} attempts - type q to quit", self.max_guesses);
+
+        loop {
+            self.new_game();
+            println!("The word is {} letters long", self.answer_word.len());
+
+            while self.current_guess_num <= self.max_guesses { //guess num starts from 1
+                self.print_keyboard();
+                self.print_guess_num();
+
+                self.input_guess_word();
+                
+                match self.check_guess_errors() {
+                    InputType::OK => (), //continue as normal
+                    InputType::ERROR => continue, //abort guess and make user input again
+                    InputType::EXIT => { //user wanted to exit game
+                        self.clear_keyboard();
+                        exit(0);
+                    } 
+                }
+
+                let guess_correctness = self.get_guess_correctness();
+                self.update_letter_states(&guess_correctness);
+                self.print_guess_highlighted(&guess_correctness);
+
+                if self.guess_word == self.answer_word {
+                    break;
+                }
+                
+                self.current_guess_num = self.current_guess_num + 1;
+            }
+
+            self.clear_keyboard();
+
+            if self.current_guess_num > self.max_guesses {
+                //ran out of guesses
+                println!("Ran out of guesses, the word was {}", self.answer_word);
+            } else {
+                //guessed the word
+                println!("Correctly guessed the word");
+            }
+    
+            print!("Would you like to play again (y/N): ");
+            stdout().flush().unwrap();
+    
+            self.input_guess_word();
+            if self.guess_word != "y" {
+                break;
+            }
+        }
+    }
+}
+
+
+fn init_game() -> WordleGame{
+    let mut game = WordleGame {
+        all_words: Vec::<String>::new(),
+        answer_word: String::new(),
+        guess_word: String::new(),
+        letter_states: HashMap::<char, LetterState>::new(),
+        max_guesses: 6,
+        current_guess_num: 1
+    };
+
+    game.load_word_list();
+    
+    return game;
+}
+
+fn main() {
+    let mut game = init_game();
+    game.run();
 }
