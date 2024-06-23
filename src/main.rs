@@ -25,7 +25,8 @@ enum InputType {
 }
 
 struct WordleGame {
-    all_words: Vec<String>,
+    all_answer_words: Vec<String>,
+    extra_guessable_words: Vec<String>,
     answer_word: String,
     guess_word: String,
     letter_states: HashMap<char, LetterState>,
@@ -35,8 +36,14 @@ struct WordleGame {
 
 impl WordleGame {
     fn load_word_list(&mut self) {
-        self.all_words = fs::read_to_string("./wordle-La.txt")
+        self.all_answer_words = fs::read_to_string("./wordle-La.txt")
             .expect("Failed to open wordle-LA.txt")
+            .lines()
+            .map(String::from)
+            .collect();
+
+        self.extra_guessable_words = fs::read_to_string("./wordle-Ta.txt")
+            .expect("Failed to open wordle-TA.txt")
             .lines()
             .map(String::from)
             .collect();
@@ -49,8 +56,8 @@ impl WordleGame {
     }
 
     fn new_answer_word(&mut self) {
-        let word_index = (rand::random::<f32>() * self.all_words.len() as f32).floor() as usize;
-        self.answer_word = self.all_words[word_index].clone();
+        let word_index = (rand::random::<f32>() * self.all_answer_words.len() as f32).floor() as usize;
+        self.answer_word = self.all_answer_words[word_index].clone();
     }
 
     fn reset_letter_states(&mut self) {
@@ -160,7 +167,7 @@ impl WordleGame {
         }
 
         //check if input word is a real word (according to the almighty wordle list)
-        if !self.all_words.contains(&self.guess_word) {
+        if !self.all_answer_words.contains(&self.guess_word) && !self.extra_guessable_words.contains(&self.guess_word) {
             self.print_user_input_error(String::from(format!("{} is not in the dictionary", self.guess_word)));
             return InputType::ERROR;
         }
@@ -303,7 +310,8 @@ impl WordleGame {
 
 fn init_game() -> WordleGame{
     let mut game = WordleGame {
-        all_words: Vec::<String>::new(),
+        all_answer_words: Vec::<String>::new(),
+        extra_guessable_words: Vec::<String>::new(),
         answer_word: String::new(),
         guess_word: String::new(),
         letter_states: HashMap::<char, LetterState>::new(),
